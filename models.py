@@ -19,7 +19,7 @@ np.random.seed(0)
 # --- Scaling MLP ---
 class ScalingMLP(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim=64, num_layers=3,
-                 activation=nn.ReLU, dropout=0.0, batch_norm=True):
+                 activation=nn.ReLU, batch_norm=True):
         super().__init__()
         layers = []
         if num_layers == 0:
@@ -29,15 +29,11 @@ class ScalingMLP(nn.Module):
             if batch_norm:
                 layers.append(nn.BatchNorm1d(hidden_dim))
             layers.append(activation())
-            if dropout > 0:
-                layers.append(nn.Dropout(dropout))
             for _ in range(num_layers - 1):
                 layers.append(nn.Linear(hidden_dim, hidden_dim))
                 if batch_norm:
                     layers.append(nn.BatchNorm1d(hidden_dim))
                 layers.append(activation())
-                if dropout > 0:
-                    layers.append(nn.Dropout(dropout))
             layers.append(nn.Linear(hidden_dim, output_dim))
         self.net = nn.Sequential(*layers)
     def forward(self, x):
@@ -46,13 +42,12 @@ class ScalingMLP(nn.Module):
 # ----- Model -----
 
 class ResidualMLPBlock(nn.Module):
-    def __init__(self, dim, alpha, L, dropout=0.0):
+    def __init__(self, dim, alpha, L):
         super().__init__()
         self.ln = nn.LayerNorm(dim)
         self.ff = nn.Sequential(
             nn.Linear(dim, dim),
             nn.Sigmoid(),
-            nn.Dropout(dropout),
             nn.Linear(dim, dim),
         )
         self.alpha = alpha
@@ -63,10 +58,10 @@ class ResidualMLPBlock(nn.Module):
         return x + (self.L ** (-self.alpha)) * self.ff(self.ln(x))
 
 class ResidualMLPCompleteP(nn.Module):
-    def __init__(self, input_dim=28*28, hidden_dim=512, num_layers=4, num_classes=10, alpha=1.0, dropout=0.0):
+    def __init__(self, input_dim=28*28, hidden_dim=512, num_layers=4, num_classes=10, alpha=1.0):
         super().__init__()
         self.inp = nn.Linear(input_dim, hidden_dim) if num_layers > 0 else None
-        self.blocks = nn.ModuleList([ResidualMLPBlock(hidden_dim, alpha=alpha, L=num_layers, dropout=dropout)
+        self.blocks = nn.ModuleList([ResidualMLPBlock(hidden_dim, alpha=alpha, L=num_layers)
                                      for _ in range(num_layers)])
         self.final_ln = nn.LayerNorm(hidden_dim) if num_layers > 0 else None
         self.out = nn.Linear(hidden_dim if num_layers > 0 else input_dim, num_classes)
