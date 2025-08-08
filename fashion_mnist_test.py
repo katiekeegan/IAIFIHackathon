@@ -1,5 +1,4 @@
 import os
-os.environ["TORCH_DISABLE_DYNAMO"] = "1"
 
 import torch
 import numpy as np
@@ -12,12 +11,54 @@ from torch.utils.data import DataLoader, Subset
 from utils import *
 from models import *
 
+torch.backends.cudnn.benchmark = True
+
 # -------------------
 # Setup
 # -------------------
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(0)
 np.random.seed(0)
+
+# ----- Train / Eval -----
+def train_one(model, opt, criterion, loader, epochs=2):
+    model.train()
+    for _ in range(epochs):
+        for xb, yb in loader:
+            xb, yb = xb.to(device, non_blocking=True), yb.to(device, non_blocking=True)
+            opt.zero_grad(set_to_none=True)
+            logits = model(xb)
+            loss = criterion(logits, yb)
+            loss.backward()
+            opt.step()
+
+@torch.no_grad()
+def eval_acc(model, loader):
+    model.eval()
+    correct, total = 0, 0
+    for xb, yb in loader:
+        xb, yb = xb.to(device, non_blocking=True), yb.to(device, non_blocking=True)
+        preds = model(xb).argmax(dim=1)
+        correct += (preds == yb).sum().item()
+        total += yb.numel()
+    return correct / total
+
+def run_trial(num_layers, lr, alpha=1.0, epochs=2, hidden_dim=512, weight_decay=0.0, adam_eps=1e-8):
+    model = ResidualMLPCompleteP(
+        input_dim=28*28, hidden_dim=hidden_dim, num_layers=num_layers,
+        num_classes=10, alpha=alpha
+    ).to(device)
+
+    criterion = nn.CrossEntropyLoss()
+
+    # AdamW groups: apply L^(alpha-1) to hidden/LN/bias group, base LR elsewhere
+    param_groups = make_param_groups(model, base_lr=lr, L=num_layers, alpha=alpha)
+    opt = optim.AdamW(param_groups, lr=lr, weight_decay=weight_decay, eps=adam_eps)
+
+    train_one(model, opt, criterion, train_loader, epochs=epochs)
+    acc = eval_acc(model, test_loader)
+    return acc
+
 
 # Folder for results
 save_dir = "fashion_mnist"
@@ -34,37 +75,50 @@ subset_size = 15000
 train_indices = np.random.RandomState(0).choice(len(train_ds), size=subset_size, replace=False)
 train_sub = Subset(train_ds, train_indices)
 
-train_loader = DataLoader(train_sub, batch_size=256, shuffle=True, num_workers=1, pin_memory=True)
-test_loader  = DataLoader(test_ds,  batch_size=512, shuffle=False, num_workers=1, pin_memory=True)
+train_loader = DataLoader(train_sub, batch_size=256, shuffle=True, num_workers=8, pin_memory=True)
+test_loader  = DataLoader(test_ds,  batch_size=512, shuffle=False, num_workers=8, pin_memory=True)
 
 # -------------------
 # Sweep settings
 # -------------------
 depths = [2, 4, 8, 16]
-lrs = np.array([1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0])
+lrs = np.array([1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0])
 EPOCHS = 2
 H = 512
 alphas = [0.5, 1.0, 2.0]  # <-- change as needed
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import pandas as pd
+import os
+from time import time
+
+def run_one(depth, lr, alpha):
+    acc = run_trial(
+        num_layers=depth,
+        lr=float(lr),
+        alpha=alpha,
+        epochs=EPOCHS,
+        hidden_dim=H,
+        weight_decay=0.0
+    )
+    return {"num_layers": depth, "alpha": alpha, "lr": float(lr), "accuracy": acc}
 
 # -------------------
 # Main loop
 # -------------------
 for alpha in alphas:
     print(f"\n=== Running alpha={alpha} ===")
-    records = []
     t0 = time()
-    for d in depths:
-        for lr in lrs:
-            acc = run_trial(
-                num_layers=d,
-                lr=float(lr),
-                alpha=alpha,
-                epochs=EPOCHS,
-                hidden_dim=H,
-                weight_decay=0.0
-            )
-            records.append({"num_layers": d, "alpha": alpha, "lr": float(lr), "accuracy": acc})
-            print(f"Depth {d} | LR {lr:.1e} | Accuracy: {acc:.4f}")
+
+    # Submit all jobs in parallel
+    with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+        futures = [executor.submit(run_one, d, lr, alpha) for d in depths for lr in lrs]
+
+        records = []
+        for f in as_completed(futures):
+            res = f.result()
+            records.append(res)
+            print(f"Depth {res['num_layers']} | LR {res['lr']:.1e} | Accuracy: {res['accuracy']:.4f}")
 
     elapsed = time() - t0
     df = pd.DataFrame(records).sort_values(["num_layers", "lr"])
@@ -86,7 +140,6 @@ for alpha in alphas:
     plt.legend()
     plt.tight_layout()
 
-    # Save figure
     fig_path = os.path.join(save_dir, f"fashion_alpha_{alpha}.png")
     plt.savefig(fig_path, dpi=300)
     plt.close()
