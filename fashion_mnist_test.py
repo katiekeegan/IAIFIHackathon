@@ -20,8 +20,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(0)
 np.random.seed(0)
 
-# ----- Train / Eval -----
-def train_one(model, opt, criterion, loader, epochs=2):
+def train_one(model, opt, criterion, loader, epochs=2, val_loader=None):
+    best_mse = float("inf")
     model.train()
     for _ in range(epochs):
         for xb, yb in loader:
@@ -31,6 +31,11 @@ def train_one(model, opt, criterion, loader, epochs=2):
             loss = criterion(logits, yb)
             loss.backward()
             opt.step()
+        # monitor after each epoch
+        if val_loader is not None:
+            curr_mse = eval_mse(model, val_loader)
+            best_mse = min(best_mse, curr_mse)
+    return best_mse
 
 @torch.no_grad()
 def eval_acc(model, loader):
@@ -43,24 +48,38 @@ def eval_acc(model, loader):
         total += yb.numel()
     return correct / total
 
+@torch.no_grad()
+def eval_mse(model, loader):
+    model.eval()
+    mse_sum, n = 0.0, 0
+    for xb, yb in loader:
+        xb, yb = xb.to(device, non_blocking=True), yb.to(device, non_blocking=True)
+        logits = model(xb)
+        probs = torch.softmax(logits, dim=1)
+        y_oh = torch.nn.functional.one_hot(yb, num_classes=probs.shape[1]).float()
+        # per-sample MSE over classes, then average over batch
+        batch_mse = ((probs - y_oh)**2).mean(dim=1)
+        mse_sum += batch_mse.sum().item()
+        n += yb.size(0)
+    return mse_sum / n
+
 def run_trial(num_layers, lr, alpha=1.0, epochs=2, hidden_dim=512, weight_decay=0.0, adam_eps=1e-8):
     model = ResidualMLPCompleteP(
         input_dim=28*28, hidden_dim=hidden_dim, num_layers=num_layers,
         num_classes=10, alpha=alpha
     ).to(device)
 
-    # Fan-in init (use "relu" even for GELU; it's standard practice)
     model.apply(lambda m: init_fanin(m, nonlinearity="relu"))
-    # zero_last_linear_weights(model)  # <- optional
 
     criterion = nn.CrossEntropyLoss()
-
     param_groups = make_param_groups(model, base_lr=lr, L=num_layers, alpha=alpha)
     opt = optim.AdamW(param_groups, lr=lr, weight_decay=weight_decay, eps=adam_eps)
 
-    train_one(model, opt, criterion, train_loader, epochs=epochs)
+    best_mse = train_one(model, opt, criterion, train_loader, epochs=epochs, val_loader=test_loader)
     acc = eval_acc(model, test_loader)
-    return acc
+    mse = eval_mse(model, test_loader)
+
+    return acc, mse, best_mse
 
 
 # Folder for results
@@ -115,16 +134,13 @@ for alpha in alphas:
     t0 = time()
     for d in depths:
         for lr in lrs:
-            acc = run_trial(
-                num_layers=d,
-                lr=float(lr),
-                alpha=alpha,
-                epochs=EPOCHS,
-                hidden_dim=H,
-                weight_decay=0.0
+            acc, mse, best_mse = run_trial(
+                num_layers=d, lr=float(lr), alpha=alpha,
+                epochs=EPOCHS, hidden_dim=H, weight_decay=0.0
             )
-            records.append({"num_layers": d, "alpha": alpha, "lr": float(lr), "accuracy": acc})
-            print(f"Depth {d} | LR {lr:.1e} | Accuracy: {acc:.4f}")
+            records.append({"num_layers": d, "alpha": alpha, "lr": float(lr),
+                            "accuracy": acc, "mse": mse, "best_mse": best_mse})
+            print(f"Depth {d} | LR {lr:.1e} | Acc: {acc:.4f} | MSE: {mse:.6f} | Best MSE: {best_mse:.6f}")
 
     elapsed = time() - t0
     df = pd.DataFrame(records).sort_values(["num_layers", "lr"])
@@ -133,7 +149,7 @@ for alpha in alphas:
     csv_path = os.path.join(save_dir, f"fashion_alpha_{alpha}.csv")
     df.to_csv(csv_path, index=False)
 
-    # Plot
+    # --- Accuracy plot (unchanged) ---
     plt.figure(figsize=(7, 5))
     for d in depths:
         sub = df[df["num_layers"] == d].sort_values("lr")
@@ -145,10 +161,23 @@ for alpha in alphas:
     plt.grid(True, which="both", linestyle="--", linewidth=0.5)
     plt.legend()
     plt.tight_layout()
-
-    # Save figure
-    fig_path = os.path.join(save_dir, f"fashion_alpha_{alpha}.png")
-    plt.savefig(fig_path, dpi=300)
+    plt.savefig(os.path.join(save_dir, f"fashion_alpha_{alpha}_accuracy.png"), dpi=300)
     plt.close()
 
-    print(f"Saved results for alpha={alpha} in {save_dir} (elapsed {elapsed:.1f}s)")
+    # --- MSE plot ---
+    plt.figure(figsize=(7, 5))
+    min_mse_val = df["mse"].min()
+    for d in depths:
+        sub = df[df["num_layers"] == d].sort_values("lr")
+        plt.plot(sub["lr"], sub["mse"], marker='o', label=f"{d} layers")
+    plt.axhline(min_mse_val, color='red', linestyle='--', linewidth=1,
+                label=f"Lowest MSE = {min_mse_val:.6f}")
+    plt.xscale("log")
+    plt.xlabel("Learning Rate")
+    plt.ylabel("Test MSE")
+    plt.title(f"Fashion-MNIST (alpha={alpha}): MSE vs Learning Rate")
+    plt.grid(True, which="both", linestyle="--", linewidth=0.5)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, f"fashion_alpha_{alpha}_mse.png"), dpi=300)
+    plt.close()
