@@ -1,4 +1,6 @@
 __pycache__/
 *.pyc
 data/FashionMNIST/
-*.pngfashion_mnist/*.csv
+*.png
+fashion_mnist/
+*.csv

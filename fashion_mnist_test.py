@@ -124,60 +124,72 @@ def run_one(depth, lr, alpha):
         weight_decay=0.0
     )
     return {"num_layers": depth, "alpha": alpha, "lr": float(lr), "accuracy": acc}
+param_styles = {
+    "SP/µP": None,   # use run_trial default for SP/µP
+    "α=0.5": 0.5,
+    "CompleteP (α=1.0)": 1.0
+}
 
-# -------------------
-# Main loop
-# -------------------
-for alpha in alphas:
-    print(f"\n=== Running alpha={alpha} ===")
+all_results = {}
+
+for label, alpha in param_styles.items():
+    print(f"\n=== Running {label} ===")
     records = []
     t0 = time()
     for d in depths:
         for lr in lrs:
             acc, mse, best_mse = run_trial(
-                num_layers=d, lr=float(lr), alpha=alpha,
-                epochs=EPOCHS, hidden_dim=H, weight_decay=0.0
+                num_layers=d,
+                lr=float(lr),
+                alpha=alpha,
+                epochs=EPOCHS,
+                hidden_dim=H,
+                weight_decay=0.0
             )
-            records.append({"num_layers": d, "alpha": alpha, "lr": float(lr),
-                            "accuracy": acc, "mse": mse, "best_mse": best_mse})
-            print(f"Depth {d} | LR {lr:.1e} | Acc: {acc:.4f} | MSE: {mse:.6f} | Best MSE: {best_mse:.6f}")
-
+            records.append({
+                "num_layers": d,
+                "lr": float(lr),
+                "accuracy": acc,
+                "mse": mse,
+                "best_mse": best_mse
+            })
+            print(f"{label} | Depth {d} | LR {lr:.1e} | Acc {acc:.4f} | MSE {mse:.6f}")
     elapsed = time() - t0
     df = pd.DataFrame(records).sort_values(["num_layers", "lr"])
-
-    # Save CSV
-    csv_path = os.path.join(save_dir, f"fashion_alpha_{alpha}.csv")
+    csv_path = os.path.join(save_dir, f"fashion_{label.replace(' ', '_')}.csv")
     df.to_csv(csv_path, index=False)
+    all_results[label] = df
 
-    # --- Accuracy plot (unchanged) ---
-    plt.figure(figsize=(7, 5))
+# ---- Figure 2 style: top row ----
+fig, axes = plt.subplots(1, 3, figsize=(15, 4), sharey=True)
+for ax, (label, df) in zip(axes, all_results.items()):
     for d in depths:
         sub = df[df["num_layers"] == d].sort_values("lr")
-        plt.plot(sub["lr"], sub["accuracy"], marker='o', label=f"{d} layers")
-    plt.xscale("log")
-    plt.xlabel("Learning Rate")
-    plt.ylabel("Test Accuracy")
-    plt.title(f"Fashion-MNIST (alpha={alpha}): Accuracy vs Learning Rate")
-    plt.grid(True, which="both", linestyle="--", linewidth=0.5)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, f"fashion_alpha_{alpha}_accuracy.png"), dpi=300)
-    plt.close()
+        ax.plot(sub["lr"], sub["mse"], marker='o', label=f"{d} layers")
+    ax.set_xscale("log")
+    ax.set_xlabel("Learning Rate")
+    ax.set_title(label)
+    ax.grid(True, which="both", linestyle="--", linewidth=0.5)
+axes[0].set_ylabel("Test MSE")
+axes[-1].legend(fontsize=8)
+plt.tight_layout()
+plt.savefig(os.path.join(save_dir, "fashion_fig2style_top.png"), dpi=300)
+plt.close()
 
-    # --- MSE plot ---
-    plt.figure(figsize=(7, 5))
-    min_mse_val = df["mse"].min()
+# ---- Figure 2 style: bottom row ("Loss at optimal LR for L=2") ----
+fig, axes = plt.subplots(1, 3, figsize=(15, 4), sharey=True)
+for ax, (label, df) in zip(axes, all_results.items()):
+    # find LR at depth=2 with lowest MSE
+    base_lr = df[df["num_layers"] == 2].sort_values("mse").iloc[0]["lr"]
+    print(f"{label}: optimal LR for L=2 is {base_lr:.1e}")
     for d in depths:
-        sub = df[df["num_layers"] == d].sort_values("lr")
-        plt.plot(sub["lr"], sub["mse"], marker='o', label=f"{d} layers")
-    plt.axhline(min_mse_val, color='red', linestyle='--', linewidth=1,
-                label=f"Lowest MSE = {min_mse_val:.6f}")
-    plt.xscale("log")
-    plt.xlabel("Learning Rate")
-    plt.ylabel("Test MSE")
-    plt.title(f"Fashion-MNIST (alpha={alpha}): MSE vs Learning Rate")
-    plt.grid(True, which="both", linestyle="--", linewidth=0.5)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, f"fashion_alpha_{alpha}_mse.png"), dpi=300)
-    plt.close()
+        sub = df[(df["num_layers"] == d) & (df["lr"] == base_lr)]
+        ax.plot([d], sub["mse"], marker='o', label=f"{d} layers")
+    ax.set_xscale("log", base=2)
+    ax.set_xlabel("Depth (L)")
+    ax.set_title(label)
+    ax.grid(True, which="both", linestyle="--", linewidth=0.5)
+axes[0].set_ylabel("Test MSE")
+plt.tight_layout()
+plt.savefig(os.path.join(save_dir, "fashion_fig2style_bottom.png"), dpi=300)
+plt.close()
