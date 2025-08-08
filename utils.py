@@ -22,6 +22,9 @@ def make_param_groups(model, base_lr, L, alpha):
     Create optimizer param groups with LR scaled by L^(alpha-1) for hidden/LN/bias params,
     following the depth rule in Table 1 (ignoring width scaling for simplicity).
     """
+    if alpha is None:
+        alpha = 1.0  # SP/µP: depth-independent LR scaling
+
     scale = (L ** (alpha - 1.0)) if L > 0 else 1.0
     groups = []
 

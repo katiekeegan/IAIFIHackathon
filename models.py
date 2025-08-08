@@ -38,9 +38,6 @@ class ScalingMLP(nn.Module):
         self.net = nn.Sequential(*layers)
     def forward(self, x):
         return self.net(x)
-
-# ----- Model -----
-
 class ResidualMLPBlock(nn.Module):
     def __init__(self, dim, alpha, L):
         super().__init__()
@@ -50,21 +47,31 @@ class ResidualMLPBlock(nn.Module):
             nn.Sigmoid(),
             nn.Linear(dim, dim),
         )
-        self.alpha = alpha
-        self.L = max(L, 1)  # avoid divide by zero when L=0
+
+        # Store effective alpha for forward scaling
+        # SP/µP has no depth scaling in forward, so factor=1
+        self.forward_alpha = 0.0 if alpha is None else alpha
+
+        self.L = max(L, 1)  # avoid divide-by-zero
 
     def forward(self, x):
         # Pre-LN residual: h -> h + L^{-alpha} * FF(LN(h))
-        return x + (self.L ** (-self.alpha)) * self.ff(self.ln(x))
+        return x + (self.L ** (-self.forward_alpha)) * self.ff(self.ln(x))
+
 
 class ResidualMLPCompleteP(nn.Module):
-    def __init__(self, input_dim=28*28, hidden_dim=512, num_layers=4, num_classes=10, alpha=1.0):
+    def __init__(self, input_dim=28*28, hidden_dim=512, num_layers=4,
+                 num_classes=10, alpha=1.0):
         super().__init__()
+
         self.inp = nn.Linear(input_dim, hidden_dim) if num_layers > 0 else None
-        self.blocks = nn.ModuleList([ResidualMLPBlock(hidden_dim, alpha=alpha, L=num_layers)
-                                     for _ in range(num_layers)])
+        self.blocks = nn.ModuleList([
+            ResidualMLPBlock(hidden_dim, alpha=alpha, L=num_layers)
+            for _ in range(num_layers)
+        ])
         self.final_ln = nn.LayerNorm(hidden_dim) if num_layers > 0 else None
         self.out = nn.Linear(hidden_dim if num_layers > 0 else input_dim, num_classes)
+
         self.num_layers = num_layers
         self.alpha = alpha
         self.hidden_dim = hidden_dim
