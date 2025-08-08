@@ -61,8 +61,7 @@ for alpha in alphas:
                 alpha=alpha,
                 epochs=EPOCHS,
                 hidden_dim=H,
-                weight_decay=0.0,
-                dropout=0.0
+                weight_decay=0.0
             )
             records.append({"num_layers": d, "alpha": alpha, "lr": float(lr), "accuracy": acc})
             print(f"Depth {d} | LR {lr:.1e} | Accuracy: {acc:.4f}")

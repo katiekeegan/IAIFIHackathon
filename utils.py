@@ -72,10 +72,10 @@ def eval_acc(model, loader):
         total += yb.numel()
     return correct / total
 
-def run_trial(num_layers, lr, alpha=1.0, epochs=2, hidden_dim=512, weight_decay=0.0, dropout=0.0, adam_eps=1e-8):
+def run_trial(num_layers, lr, alpha=1.0, epochs=2, hidden_dim=512, weight_decay=0.0, adam_eps=1e-8):
     model = ResidualMLPCompleteP(
         input_dim=28*28, hidden_dim=hidden_dim, num_layers=num_layers,
-        num_classes=10, alpha=alpha, dropout=dropout
+        num_classes=10, alpha=alpha
     ).to(device)
 
     criterion = nn.CrossEntropyLoss()

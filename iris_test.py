@@ -42,7 +42,7 @@ def train_and_eval(num_layers, lr, epochs=100, hidden_dim=64, weight_decay=0.0):
     model = ScalingMLP(
         input_dim=4, output_dim=3,
         hidden_dim=hidden_dim, num_layers=num_layers,
-        activation=nn.ReLU, dropout=0.0, batch_norm=True
+        activation=nn.ReLU, batch_norm=True
     )
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
