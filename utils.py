@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from time import time
 from datetime import datetime
+from models import *
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(0)
