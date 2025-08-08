@@ -47,3 +47,26 @@ def make_param_groups(model, base_lr, L, alpha):
         groups.append({"params": head_params, "lr": base_lr})
 
     return groups
+
+def init_fanin(m, nonlinearity="relu"):
+    # Works well for ReLU/GELU networks
+    if isinstance(m, (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+        nn.init.kaiming_normal_(m.weight, mode="fan_in", nonlinearity=nonlinearity)
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+    elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+        if hasattr(m, "weight") and m.weight is not None:
+            nn.init.ones_(m.weight)
+        if hasattr(m, "bias") and m.bias is not None:
+            nn.init.zeros_(m.bias)
+
+# (Optional) If you want the very last classifier layer to start small:
+def zero_last_linear_weights(model):
+    last = None
+    for m in model.modules():
+        if isinstance(m, nn.Linear):
+            last = m
+    if last is not None:
+        nn.init.zeros_(last.weight)
+        if last.bias is not None:
+            nn.init.zeros_(last.bias)

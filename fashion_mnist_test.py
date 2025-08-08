@@ -49,9 +49,12 @@ def run_trial(num_layers, lr, alpha=1.0, epochs=2, hidden_dim=512, weight_decay=
         num_classes=10, alpha=alpha
     ).to(device)
 
+    # Fan-in init (use "relu" even for GELU; it's standard practice)
+    model.apply(lambda m: init_fanin(m, nonlinearity="relu"))
+    # zero_last_linear_weights(model)  # <- optional
+
     criterion = nn.CrossEntropyLoss()
 
-    # AdamW groups: apply L^(alpha-1) to hidden/LN/bias group, base LR elsewhere
     param_groups = make_param_groups(model, base_lr=lr, L=num_layers, alpha=alpha)
     opt = optim.AdamW(param_groups, lr=lr, weight_decay=weight_decay, eps=adam_eps)
 
@@ -75,17 +78,17 @@ subset_size = 15000
 train_indices = np.random.RandomState(0).choice(len(train_ds), size=subset_size, replace=False)
 train_sub = Subset(train_ds, train_indices)
 
-train_loader = DataLoader(train_sub, batch_size=256, shuffle=True, num_workers=8, pin_memory=True)
-test_loader  = DataLoader(test_ds,  batch_size=512, shuffle=False, num_workers=8, pin_memory=True)
+train_loader = DataLoader(train_sub, batch_size=256, shuffle=True, num_workers=1, pin_memory=True)
+test_loader  = DataLoader(test_ds,  batch_size=512, shuffle=False, num_workers=1, pin_memory=True)
 
 # -------------------
 # Sweep settings
 # -------------------
-depths = [2, 4, 8, 16]
+depths = [2, 4, 8, 16, 32, 64, 128]
 lrs = np.array([1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0])
 EPOCHS = 2
 H = 512
-alphas = [0.5, 1.0, 2.0]  # <-- change as needed
+alphas = [0.5, 1.0]  # <-- change as needed
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
@@ -108,17 +111,20 @@ def run_one(depth, lr, alpha):
 # -------------------
 for alpha in alphas:
     print(f"\n=== Running alpha={alpha} ===")
+    records = []
     t0 = time()
-
-    # Submit all jobs in parallel
-    with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
-        futures = [executor.submit(run_one, d, lr, alpha) for d in depths for lr in lrs]
-
-        records = []
-        for f in as_completed(futures):
-            res = f.result()
-            records.append(res)
-            print(f"Depth {res['num_layers']} | LR {res['lr']:.1e} | Accuracy: {res['accuracy']:.4f}")
+    for d in depths:
+        for lr in lrs:
+            acc = run_trial(
+                num_layers=d,
+                lr=float(lr),
+                alpha=alpha,
+                epochs=EPOCHS,
+                hidden_dim=H,
+                weight_decay=0.0
+            )
+            records.append({"num_layers": d, "alpha": alpha, "lr": float(lr), "accuracy": acc})
+            print(f"Depth {d} | LR {lr:.1e} | Accuracy: {acc:.4f}")
 
     elapsed = time() - t0
     df = pd.DataFrame(records).sort_values(["num_layers", "lr"])
@@ -140,6 +146,7 @@ for alpha in alphas:
     plt.legend()
     plt.tight_layout()
 
+    # Save figure
     fig_path = os.path.join(save_dir, f"fashion_alpha_{alpha}.png")
     plt.savefig(fig_path, dpi=300)
     plt.close()
